@@ -1,151 +1,142 @@
 import cv2
 import pygame
-import threading
-import time
-import random
+import sys
 
+# -------------------------
+# Pygame
+# -------------------------
+pygame.init()
 
-# ------------------ EyeManager ------------------
-class EyeManager:
-    def __init__(self):
-        pygame.init()
-        self.screen = pygame.display.set_mode((320, 240))
-        pygame.display.set_caption("FurDisplay Eyes")
+SCREEN_W = 1000
+SCREEN_H = 400
 
-        self.eye1 = [160, 120]
-        self.eye2 = [160, 120]
+screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+pygame.display.set_caption("Robot Eyes Tracker")
 
-        self.lock = threading.Lock()
+# Загрузка глаз
+left_eye_img = pygame.image.load("Eyes.jpeg").convert_alpha()
+right_eye_img = pygame.image.load("Eyes2.jpeg").convert_alpha()
 
-    def update(self, coords):
-        with self.lock:
-            if coords:
-                self.eye1 = list(coords[0])
-                if len(coords) > 1:
-                    self.eye2 = list(coords[1])
-            else:
-                self.eye1 = [160, 120]
-                self.eye2 = [160, 120]
+left_eye_img = pygame.transform.scale(left_eye_img, (200, 200))
+right_eye_img = pygame.transform.scale(right_eye_img, (200, 200))
 
-    def render(self):
-        with self.lock:
-            self.screen.fill((255, 255, 255))
+# -------------------------
+# Camera
+# -------------------------
+cap = cv2.VideoCapture(0)
 
-            pygame.draw.rect(
-                self.screen,
-                (0, 0, 0),
-                pygame.Rect(self.eye1[0] - 10, self.eye1[1] - 10, 20, 20),
-            )
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades +
+    "haarcascade_frontalface_default.xml"
+)
 
-            pygame.draw.rect(
-                self.screen,
-                (0, 0, 0),
-                pygame.Rect(self.eye2[0] - 10, self.eye2[1] - 10, 20, 20),
-            )
+# Положение глаз
+eye_offset_x = 0
+eye_offset_y = 0
 
-            pygame.display.flip()
+clock = pygame.time.Clock()
 
+# -------------------------
+# Main loop
+# -------------------------
+running = True
 
-# ------------------ CameraManager (REAL OpenCV) ------------------
-class CameraManager:
-    def __init__(self):
-        self.cap = cv2.VideoCapture(0)
-        self.coords = []
-        self.lock = threading.Lock()
+while running:
 
-        # Face detector (Haar cascade)
-        self.face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
+    # pygame events
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
 
-    def capture_frames(self):
-        ret, frame = self.cap.read()
-        if not ret:
-            return
+    ret, frame = cap.read()
+
+    if ret:
+
+        frame = cv2.flip(frame, 1)
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.3,
+            minNeighbors=5
+        )
 
-        coords = []
+        h, w = frame.shape[:2]
 
-        for (x, y, w, h) in faces:
-            cx = x + w // 2
-            cy = y + h // 2
-            coords.append((cx, cy))
+        # Центр камеры
+        center_x = w // 2
+        center_y = h // 2
 
-        # если нет лица — случайное движение
-        if not coords:
-            h, w = frame.shape[:2]
-            coords = [
-                (random.randint(0, w), random.randint(0, h)),
-                (random.randint(0, w), random.randint(0, h)),
-            ]
+        if len(faces) > 0:
 
-        with self.lock:
-            self.coords = coords
+            x, y, fw, fh = faces[0]
 
-    def get_object_coordinates(self):
-        with self.lock:
-            return self.coords.copy()
+            face_x = x + fw // 2
+            face_y = y + fh // 2
 
+            # Рисуем рамку
+            cv2.rectangle(
+                frame,
+                (x, y),
+                (x + fw, y + fh),
+                (0, 255, 0),
+                2
+            )
 
-# ------------------ BluetoothManager (stub) ------------------
-class BluetoothManager:
-    def send_status(self, coords, battery):
-        print(f"[BT] battery={battery} coords={coords}")
+            # Движение глаз
+            eye_offset_x = int((face_x - center_x) * 0.08)
+            eye_offset_y = int((face_y - center_y) * 0.08)
 
+            eye_offset_x = max(-25, min(25, eye_offset_x))
+            eye_offset_y = max(-25, min(25, eye_offset_y))
 
-# ------------------ BatteryManager ------------------
-class BatteryManager:
-    def get_status(self):
-        return "95%"
+        # OpenCV -> Pygame
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        cam_surface = pygame.surfarray.make_surface(
+            frame_rgb.swapaxes(0, 1)
+        )
 
-# ------------------ MAIN ------------------
-def main():
-    eyes = EyeManager()
-    camera = CameraManager()
-    bt = BluetoothManager()
-    battery = BatteryManager()
+        cam_surface = pygame.transform.scale(
+            cam_surface,
+            (400, 300)
+        )
 
-    running = True
+        # -------------------------
+        # Draw
+        # -------------------------
+        screen.fill((30, 30, 30))
 
-    # --- Camera thread ---
-    def cam_loop():
-        while running:
-            camera.capture_frames()
-            time.sleep(0.03)
+        # Камера
+        screen.blit(cam_surface, (10, 50))
 
-    # --- Eye render thread ---
-    def eye_loop():
-        while running:
-            coords = camera.get_object_coordinates()
-            eyes.update(coords)
-            eyes.render()
-            time.sleep(0.016)
+        # Левый глаз
+        screen.blit(
+            left_eye_img,
+            (
+                500 + eye_offset_x,
+                100 + eye_offset_y
+            )
+        )
 
-    # --- Bluetooth thread ---
-    def bt_loop():
-        while running:
-            coords = camera.get_object_coordinates()
-            batt = battery.get_status()
-            bt.send_status(coords, batt)
-            time.sleep(0.5)
+        # Правый глаз
+        screen.blit(
+            right_eye_img,
+            (
+                750 + eye_offset_x,
+                100 + eye_offset_y
+            )
+        )
 
-    threading.Thread(target=cam_loop, daemon=True).start()
-    threading.Thread(target=eye_loop, daemon=True).start()
-    threading.Thread(target=bt_loop, daemon=True).start()
+        pygame.display.flip()
 
-    # main loop (pygame events)
-    while True:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-                return
+    clock.tick(60)
 
-        time.sleep(0.01)
-
-
-if __name__ == "__main__":
-    main()
+# -------------------------
+# Cleanup
+# -------------------------
+cap.release()
+cv2.destroyAllWindows()
+pygame.quit()
+sys.exit()
